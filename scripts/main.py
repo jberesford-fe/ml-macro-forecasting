@@ -1,50 +1,81 @@
-import requests
 import pandas as pd
-import json
+import requests
 from io import StringIO
+import seaborn as sns
+from neuralprophet import NeuralProphet
+import numpy as np
 
-# Step 1: Retrieve the dataset version metadata.
+# Monkey-patch: if np.NaN is missing, set it to np.nan
+if not hasattr(np, 'NaN'):
+    np.NaN = np.nan
+
+# Download the dataset metadata and CSV URL
 version_url = "https://api.beta.ons.gov.uk/v1/datasets/retail-sales-index/editions/time-series/versions/32"
 response = requests.get(version_url)
-
-if response.status_code != 200:
-    print(f"Failed to retrieve dataset version metadata. HTTP Status: {response.status_code}")
-    exit(1)
-
+response.raise_for_status()  # Raises an exception for HTTP errors
 data = response.json()
 
-# Step 2: Inspect the downloads field.
-downloads = data.get("downloads")
-if not downloads:
-    print("No downloads field found in the metadata.")
-    exit(1)
-
-print("Available download links:")
-print(json.dumps(downloads, indent=2))
-
-# Step 3: Use the CSV download link if available.
-csv_link_info = downloads.get("csv")
-if not csv_link_info:
-    print("No CSV download link available.")
-    exit(1)
-
-# Extract the URL from the dictionary.
-csv_url = csv_link_info.get("href")
-print("Downloading CSV data from:", csv_url)
+# Extract the CSV download URL and download the CSV data.
+csv_url = data["downloads"]["csv"]["href"]
 csv_response = requests.get(csv_url)
+csv_response.raise_for_status()
 
-if csv_response.status_code != 200:
-    print(f"Failed to download CSV data. HTTP Status: {csv_response.status_code}")
-    exit(1)
+df = pd.read_csv(StringIO(csv_response.text))
 
-# Step 4: Load the CSV data into a Pandas DataFrame.
-csv_data = StringIO(csv_response.text)
-df = pd.read_csv(csv_data)
+# Filter and sort the data for the chained-volume percentage change on the previous month,
+# and for the 'all-retailing-including-automotive-fuel' category.
+df_mom = df[
+    (df['type-of-prices'] == "chained-volume-percentage-change-on-previous-month") & 
+    (df['sic-unofficial'] == "all-retailing-including-automotive-fuel")
+].sort_values('mmm-yy')
 
-# Display the first few rows of the DataFrame.
-print("Data preview:")
-print(df.head())
+# Create the date column 'ds' from the mmm-yy field.
+df_mom['ds'] = pd.to_datetime('01-' + df_mom['mmm-yy'], format='%d-%b-%y')
 
-# (Optional) Save the DataFrame to a CSV file locally.
-# df.to_csv("retail_sales_index_data.csv", index=False)
+# Select and rename the columns for NeuralProphet
+df_agg = df_mom[['ds', 'v4_1']].copy()
+df_agg.columns = ['ds', 'y']
 
+# Sort the data and drop missing values.
+df_input = df_agg.sort_values('ds').dropna().reset_index(drop=True)
+
+# Define a minimum training size (e.g., 12 months) so that we have enough data to train the model.
+min_train_size = 12*15
+results = []
+
+# Rolling forecast: for each month (starting from min_train_size),
+# we forecast the next month (i.e. the "actual" month) using data up to the month before.
+for i in range(min_train_size, len(df_input)):
+    # Use data up to, but not including, the i-th row for training.
+    train_data = df_input.iloc[:i].copy()
+    
+    # The actual observation we wish to forecast is at index i.
+    actual_date = df_input.iloc[i]['ds']
+    actual_value = df_input.iloc[i]['y']
+    
+    # Initialize and train the NeuralProphet model on the training data.
+    m = NeuralProphet()
+    # Adjust epochs as needed for speed/accuracy (here using 100 epochs for demonstration)
+    m.fit(train_data, freq='MS', epochs=100, progress='none')
+    
+    # Create a future dataframe to forecast one period ahead (the next month).
+    future = m.make_future_dataframe(train_data, periods=1)
+    forecast = m.predict(future)
+    
+    # Extract the forecast for the actual_date.
+    forecast_row = forecast.loc[forecast['ds'] == actual_date]
+    if not forecast_row.empty:
+        forecast_value = forecast_row['yhat1'].values[0]
+    else:
+        forecast_value = np.nan
+    
+    results.append({'ds': actual_date, 'y': actual_value, 'forecast': forecast_value})
+
+# Create the output dataframe containing ds, y, and the forecast value.
+results_df = pd.DataFrame(results)
+
+# Optionally, plot the actual vs. forecast values.
+sns.lineplot(data=results_df, x='ds', y='y', label='Actual')
+sns.lineplot(data=results_df, x='ds', y='forecast', label='Forecast')
+
+print(results_df.tail(13))
