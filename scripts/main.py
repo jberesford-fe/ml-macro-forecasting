@@ -22,29 +22,23 @@ csv_response.raise_for_status()
 
 df = pd.read_csv(StringIO(csv_response.text))
 
-# Filter and sort the data for the chained-volume percentage change on the previous month,
-# and for the 'all-retailing-including-automotive-fuel' category.
 df_mom = df[
     (df['type-of-prices'] == "chained-volume-percentage-change-on-previous-month") & 
     (df['sic-unofficial'] == "all-retailing-including-automotive-fuel")
 ].sort_values('mmm-yy')
 
-# Create the date column 'ds' from the mmm-yy field.
 df_mom['ds'] = pd.to_datetime('01-' + df_mom['mmm-yy'], format='%d-%b-%y')
 
-# Select and rename the columns for NeuralProphet
 df_agg = df_mom[['ds', 'v4_1']].copy()
 df_agg.columns = ['ds', 'y']
 
-# Sort the data and drop missing values.
 df_input = df_agg.sort_values('ds').dropna().reset_index(drop=True)
 
-# Define a minimum training size (e.g., 12 months) so that we have enough data to train the model.
 min_train_size = 12*15
 results = []
 
-# Rolling forecast: for each month (starting from min_train_size),
-# we forecast the next month (i.e. the "actual" month) using data up to the month before.
+new_var = "here is my test change"
+
 for i in range(min_train_size, len(df_input)):
     # Use data up to, but not including, the i-th row for training.
     train_data = df_input.iloc[:i].copy()
