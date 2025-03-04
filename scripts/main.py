@@ -32,7 +32,6 @@ df_mom = df[
 # Create the date column 'ds' from the mmm-yy field.
 df_mom['ds'] = pd.to_datetime('01-' + df_mom['mmm-yy'], format='%d-%b-%y')
 
-
 # Select and rename the columns for NeuralProphet
 df_agg = df_mom[['ds', 'v4_1']].copy()
 df_agg.columns = ['ds', 'y']
