@@ -37,8 +37,6 @@ df_input = df_agg.sort_values('ds').dropna().reset_index(drop=True)
 min_train_size = 12*15
 results = []
 
-new_var = "here is my test change"
-
 for i in range(min_train_size, len(df_input)):
     # Use data up to, but not including, the i-th row for training.
     train_data = df_input.iloc[:i].copy()
